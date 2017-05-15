@@ -460,7 +460,7 @@ class BuildMaster(service.ReconfigurableServiceMixin, service.MasterService,
 
         def handle_deprec(oldname, newname):
             if oldname not in kwargs:
-                return
+                return kwargs[newname]
             old = kwargs.pop(oldname)
             if old is not None:
                 if kwargs.get(newname) is None:
