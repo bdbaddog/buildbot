@@ -231,6 +231,9 @@ class BitbucketEventHandler(object):
                 if _VERBOSE_LOGGING: log.msg("CHANGE:%s"%change)
                 change_list.append(change)
 
+        # now make sure the more recent change comes last
+        change_list = sorted(change_list, key=lambda change: change['when_timestamp'])
+
         return (change_list, payload['repository']['scm'])
 
 def getChanges(request, options=None):
