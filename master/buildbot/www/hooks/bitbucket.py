@@ -26,17 +26,18 @@ from dateutil.parser import parse as dateparse
 from twisted.python import log
 
 from buildbot.util import bytes2NativeString
-from buildbot.changes.github import PullRequestMixin
+# from buildbot.changes.github import PullRequestMixin
 
 _HEADER_EVENT = b'X-Event-Key'
 _HEADER_CT = b'Content-Type'
 
+_VERBOSE_LOGGING = True
 
-
-class BitbucketEventHandler(PullRequestMixin):
+class BitbucketEventHandler(object):
 
     def __init__(self, secret, strict, codebase=None, bitbucket_property_whitelist=None):
-        log.msg("IN __init__")
+        if _VERBOSE_LOGGING:
+            log.msg("IN __init__")
         self._secret = secret
         self._strict = strict
         self._codebase = codebase
@@ -49,16 +50,17 @@ class BitbucketEventHandler(PullRequestMixin):
                              'while no secret is provided')
 
     def process(self, request):
-        log.msg("IN process")
+        if _VERBOSE_LOGGING:
+            log.msg("IN process")
 
         payload = self._get_payload(request)
 
         event_type = request.getHeader(_HEADER_EVENT)
         event_type = bytes2NativeString(event_type)
-        log.msg("X-Bitbucket-Event: {}".format(
-            event_type), logLevel=logging.DEBUG)
+        if _VERBOSE_LOGGING:
+            log.msg("X-Bitbucket-Event: {}".format(event_type), logLevel=logging.DEBUG)
 
-        event_type = event_type.split(':')[1]
+        event_type = event_type.replace(':','_')
         handler = getattr(self, 'handle_{}'.format(event_type), None)
 
         if handler is None:
@@ -81,14 +83,22 @@ class BitbucketEventHandler(PullRequestMixin):
         else:
             raise ValueError('Unknown content type: {}'.format(content_type))
 
-        log.msg("Payload: {}".format(payload), logLevel=logging.DEBUG)
+        if _VERBOSE_LOGGING:
+                log.msg("Payload: {}".format(payload), logLevel=logging.DEBUG)
 
         return payload
 
     def handle_ping(self, _, __):
         return [], 'git'
 
-    def handle_push(self, payload, event):
+    def handle_repo_push(self, payload, event):
+        """
+        Handle bitbucket repo:push payload
+
+        :param payload: parsed JSON payload
+        :param event: Always None
+        :return: tuple (changes, scm) changes is list of dicts, scm is scm type (git,hg)
+        """
         # This field is unused:
         user = payload['actor']['username']
         repo = payload['repository']['name']
@@ -100,41 +110,54 @@ class BitbucketEventHandler(PullRequestMixin):
         (changes, scm) = self._process_push_change(payload, user, repo, repo_url, project,
                                        event)
 
-        log.msg("Received {} changes from Bitbucket".format(len(changes)))
+        if _VERBOSE_LOGGING:
+            log.msg("Received {} changes from Bitbucket".format(len(changes)))
 
         return changes, scm
 
-    def handle_pull_request(self, payload, event):
+    def handle_pullrequest_fulfilled(self, payload, event):
+        """
+        Handle bitbucket pullrequest:fullfilled payload
+        :param payload: parsed JSON payload
+        :param event: Always None
+        :return: tuple (changes, scm) changes is list of dicts, scm is scm type (git,hg)
+        """
         changes = []
-        number = payload['number']
-        refname = 'refs/pull/{}/merge'.format(number)
-        commits = payload['pull_request']['commits']
-        title = payload['pull_request']['title']
-        comments = payload['pull_request']['body']
+        scm = payload['repository']['scm']
+
+        pullrequest = payload['pullrequest']
+
+        number = pullrequest['id']
+
+        branch = pullrequest['destination']['branch']['name']
+        commit = pullrequest['merge_commit']
+        title = pullrequest['title']
+        comments = pullrequest['description']
+        destination = pullrequest['destination']
 
         log.msg('Processing Bitbucket PR #{}'.format(number),
                 logLevel=logging.DEBUG)
 
-        action = payload.get('action')
-        if action not in ('opened', 'reopened', 'synchronize'):
+        action = pullrequest.get('state')
+        if action not in ('MERGED', 'reopened', 'synchronize'):
             log.msg("Bitbucket PR #{} {}, ignoring".format(number, action))
-            return changes, 'git'
+            return changes, scm
 
-        properties = self.extractProperties(payload['pull_request'])
-        properties.update({'event': event})
+        # properties = self.extractProperties(pullrequest, domain='bitbucket')
+        properties = {'event': event}
 
         change = {
-            'revision': payload['pull_request']['head']['sha'],
-            'when_timestamp': dateparse(payload['pull_request']['created_at']),
-            'branch': refname,
-            'revlink': payload['pull_request']['_links']['html']['href'],
-            'repository': payload['repository']['html_url'],
-            'project': payload['pull_request']['base']['repo']['full_name'],
+            'revision': commit['hash'],
+            'when_timestamp': dateparse(pullrequest['updated_on']),
+            'branch': branch,
+            'revlink': pullrequest['links']['html']['href'],
+            'repository': payload['repository']['links']['html']['href'],
+            'project': payload['repository']['name'],
             'category': 'pull',
             # TODO: Get author name based on login id using txbitbucket module
-            'author': payload['sender']['login'],
-            'comments': 'bitbucket Pull Request #{0} ({1} commit{2})\n{3}\n{4}'.format(
-                number, commits, 's' if commits != 1 else '', title, comments),
+            'author': payload['actor']['display_name'],
+            'comments': 'bitbucket Pull Request #{0} ({1}) {2}\n{3}'.format(
+                number, commit['hash'], title, comments),
             'properties': properties,
         }
 
@@ -147,7 +170,7 @@ class BitbucketEventHandler(PullRequestMixin):
 
         log.msg("Received {} changes from Bitbucket PR #{}".format(
             len(changes), number))
-        return changes, 'git'
+        return changes, scm
 
     def _process_push_change(self, payload, user, repo, repo_url, project, event):
         """
@@ -168,14 +191,14 @@ class BitbucketEventHandler(PullRequestMixin):
             branch = change['new']['name']
             commits = change['commits']
             for commit in commits:
-                log.msg("Processing %s"%commit)
+                if _VERBOSE_LOGGING: log.msg("Processing %s"%commit)
                 # files = []
 
                 when_timestamp = dateparse(commit['date'])
 
-                log.msg("TIME: {}  -> {}".format(commit['date'], when_timestamp))
+                if _VERBOSE_LOGGING: log.msg("TIME: {}  -> {}".format(commit['date'], when_timestamp))
 
-                log.msg("New revision: {}".format(commit['hash'][:8]))
+                if _VERBOSE_LOGGING: log.msg("New revision: {}".format(commit['hash'][:8]))
 
                 if commit['author'].get('user',False):
                     author = commit['author']['user'].get('display_name','Unknown')
@@ -198,14 +221,14 @@ class BitbucketEventHandler(PullRequestMixin):
                         'event': event,
                     },
                 }
-                log.msg("Processed:%s"%change)
+                if _VERBOSE_LOGGING: log.msg("Processed:%s"%change)
 
                 if callable(self._codebase):
                     change['codebase'] = self._codebase(payload['push'])
                 elif self._codebase is not None:
                     change['codebase'] = self._codebase
 
-                log.msg("CHANGE:%s"%change)
+                if _VERBOSE_LOGGING: log.msg("CHANGE:%s"%change)
                 change_list.append(change)
 
         return (change_list, payload['repository']['scm'])
