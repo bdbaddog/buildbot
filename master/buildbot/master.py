@@ -452,7 +452,7 @@ class BuildMaster(service.ReconfigurableServiceMixin, service.MasterService,
         # deprecated in 0.9.0; will be removed in 1.0.0
         log.msg("WARNING: change source is using deprecated "
                 "self.master.addChange method; this method will disappear in "
-                "Buildbot-1.0.0. Use MASTER Instance.data.updates.addChange() instead")
+                "Buildbot-1.0.0")
         # handle positional arguments
         kwargs['who'] = who
         kwargs['files'] = files
@@ -460,7 +460,7 @@ class BuildMaster(service.ReconfigurableServiceMixin, service.MasterService,
 
         def handle_deprec(oldname, newname):
             if oldname not in kwargs:
-                return kwargs[newname]
+                return
             old = kwargs.pop(oldname)
             if old is not None:
                 if kwargs.get(newname) is None:
