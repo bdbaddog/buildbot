@@ -70,30 +70,6 @@ class BitbucketEventHandler(PullRequestMixin):
         content = request.content.read()
         content = bytes2NativeString(content)
 
-        # signature = request.getHeader(_HEADER_SIGNATURE)
-        # signature = bytes2NativeString(signature)
-        #
-        # if not signature and self._strict:
-        #     raise ValueError('Request has no required signature')
-        #
-        # if self._secret and signature:
-        #     try:
-        #         hash_type, hexdigest = signature.split('=')
-        #     except ValueError:
-        #         raise ValueError(
-        #             'Wrong signature format: {}'.format(signature))
-        #
-        #     if hash_type != 'sha1':
-        #         raise ValueError('Unknown hash type: {}'.format(hash_type))
-        #
-        #     mac = hmac.new(unicode2bytes(self._secret),
-        #                    msg=unicode2bytes(content),
-        #                    digestmod=sha1)
-        #     # NOTE: hmac.compare_digest should be used, but it's only available
-        #     # starting Python 2.7.7
-        #     if mac.hexdigest() != hexdigest:
-        #         raise ValueError('Hash mismatch')
-
         content_type = request.getHeader(_HEADER_CT)
         content_type = bytes2NativeString(content_type)
 
@@ -121,12 +97,12 @@ class BitbucketEventHandler(PullRequestMixin):
         # project = request.args.get('project', [''])[0]
         project = payload['repository']['name']
 
-        changes = self._process_push_change(payload['push'], user, repo, repo_url, project,
+        (changes, scm) = self._process_push_change(payload, user, repo, repo_url, project,
                                        event)
 
         log.msg("Received {} changes from Bitbucket".format(len(changes)))
 
-        return changes, 'git'
+        return changes, scm
 
     def handle_pull_request(self, payload, event):
         changes = []
@@ -184,7 +160,7 @@ class BitbucketEventHandler(PullRequestMixin):
         """
         change_list = []
 
-        changes = payload['changes']
+        changes = payload['push']['changes']
         for change in changes:
 
             # TODO: Handle difference with hg and mercurial and other cases in :
@@ -196,6 +172,8 @@ class BitbucketEventHandler(PullRequestMixin):
                 # files = []
 
                 when_timestamp = dateparse(commit['date'])
+
+                log.msg("TIME: {}  -> {}".format(commit['date'], when_timestamp))
 
                 log.msg("New revision: {}".format(commit['hash'][:8]))
 
@@ -220,9 +198,10 @@ class BitbucketEventHandler(PullRequestMixin):
                         'event': event,
                     },
                 }
+                log.msg("Processed:%s"%change)
 
                 if callable(self._codebase):
-                    change['codebase'] = self._codebase(payload)
+                    change['codebase'] = self._codebase(payload['push'])
                 elif self._codebase is not None:
                     change['codebase'] = self._codebase
 
